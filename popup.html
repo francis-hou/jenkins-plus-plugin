@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Jenkins Plus</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- 已保存的Jenkins服务器列表 -->
+        <div id="savedServers" class="section">
+            <div class="header">
+                <h2>Jenkins服务器列表</h2>
+                <div class="header-buttons">
+                    <button id="importServers" class="small-button">导入</button>
+                    <button id="exportServers" class="small-button">导出</button>
+                    <button id="addServerButton" class="small-button">添加新服务器</button>
+                </div>
+            </div>
+            <!-- 分组选项 -->
+            <div class="filter-group">
+                <select id="projectFilter" class="filter-select">
+                    <option value="">所有项目</option>
+                </select>
+                <select id="envFilter" class="filter-select">
+                    <option value="">所有环境</option>
+                    <option value="test">测试环境</option>
+                    <option value="gray">灰度环境</option>
+                    <option value="prod">生产环境</option>
+                </select>
+            </div>
+            <div id="serverList"></div>
+            <!-- 隐藏的文件输入框 -->
+            <input type="file" id="fileInput" style="display: none" accept=".json">
+        </div>
+
+        <!-- 添加Jenkins服务器表单 -->
+        <div id="addServerForm" class="section" style="display: none;">
+            <div class="header">
+                <h2>连接Jenkins服务器</h2>
+                <button id="backToList" class="small-button">返回列表</button>
+            </div>
+            <div class="form-group">
+                <label>项目名称</label>
+                <input type="text" id="projectName" placeholder="例如: SFA">
+            </div>
+            <div class="form-group">
+                <label>环境类型</label>
+                <input type="text" id="envType" list="envList" placeholder="选择或输入环境类型">
+                <datalist id="envList">
+                    <option value="test">测试环境</option>
+                    <option value="gray">灰度环境</option>
+                    <option value="prod">生产环境</option>
+                </datalist>
+            </div>
+            <div class="form-group">
+                <label>Jenkins URL</label>
+                <input type="text" id="jenkinsUrl" placeholder="http://your-jenkins-url">
+            </div>
+            <div class="form-group">
+                <label>用户名</label>
+                <input type="text" id="username" placeholder="用户名">
+            </div>
+            <div class="form-group">
+                <label>Token</label>
+                <input type="password" id="token" placeholder="Jenkins API Token">
+            </div>
+            <div class="form-group">
+                <label>备注 (可选)</label>
+                <input type="text" id="serverLabel" placeholder="其他备注信息">
+            </div>
+            <button id="connectButton">连接</button>
+        </div>
+
+        <!-- 编辑Jenkins服务器表单 -->
+        <div id="editServerForm" class="section" style="display: none;">
+            <div class="header">
+                <h2>编辑Jenkins服务器</h2>
+                <button id="backToListFromEdit" class="small-button">返回列表</button>
+            </div>
+            <div class="form-group">
+                <label>项目名称</label>
+                <input type="text" id="editProjectName" placeholder="例如: SFA">
+            </div>
+            <div class="form-group">
+                <label>环境类型</label>
+                <select id="editEnvType">
+                    <option value="test">测试环境</option>
+                    <option value="gray">灰度环境</option>
+                    <option value="prod">生产环境</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Jenkins URL</label>
+                <input type="text" id="editJenkinsUrl" placeholder="http://your-jenkins-url">
+            </div>
+            <div class="form-group">
+                <label>用户名</label>
+                <input type="text" id="editUsername" placeholder="用户名">
+            </div>
+            <div class="form-group">
+                <label>Token (留空表示不修改)</label>
+                <input type="password" id="editToken" placeholder="Jenkins API Token">
+            </div>
+            <div class="form-group">
+                <label>备注 (可选)</label>
+                <input type="text" id="editServerLabel" placeholder="其他备注信息">
+            </div>
+            <button id="saveButton">保存</button>
+        </div>
+
+        <!-- Jenkins任务列表 -->
+        <div id="jobsList" class="section" style="display: none;">
+            <div class="header">
+                <h2>构建任务列表</h2>
+                <div class="header-buttons">
+                    <button id="backToServers" class="small-button">返回服务器</button>
+                    <button id="refreshJobs" class="small-button">刷新</button>
+                </div>
+            </div>
+            <!-- 添加视图筛选器 -->
+            <div class="filter-group">
+                <select id="viewFilter" class="filter-select">
+                    <option value="">所有视图</option>
+                </select>
+            </div>
+            <div class="search-box">
+                <input type="text" id="searchJobs" placeholder="搜索任务...">
+            </div>
+            <div id="jobsContainer"></div>
+        </div>
+    </div>
+    <script src="popup.js"></script>
+</body>
+</html> 
