@@ -1412,22 +1412,16 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // 只有在配置获取成功时才检查分支参数
             if (configResponse.ok) {
-                console.log('成功获取配置文件');
                 const configText = await configResponse.text();
-                
                 const parser = new DOMParser();
                 const xmlDoc = parser.parseFromString(configText, 'text/xml');
-                console.log('解析XML文档完成');
                 
                 // 查找参数定义属性
                 const paramDefProperty = xmlDoc.querySelector('hudson\\.model\\.ParametersDefinitionProperty');
-                console.log('参数定义属性:', paramDefProperty);
                 
                 if (paramDefProperty) {
-                    console.log('找到参数定义属性，开始处理分支参数');
                     // 查找所有参数定义
                     const paramDefs = paramDefProperty.querySelectorAll('parameterDefinitions > hudson\\.model\\.ChoiceParameterDefinition');
-                    console.log('找到的参数定义数量:', paramDefs.length);
                     
                     let branchParam = null;
                     
@@ -1436,32 +1430,27 @@ document.addEventListener('DOMContentLoaded', function() {
                         const nameElem = param.querySelector('name');
                         const name = nameElem?.textContent?.toLowerCase() || '';
                         const description = param.querySelector('description')?.textContent?.toLowerCase() || '';
-                        console.log('检查参数:', { name, description });
                         
                         // 检查名称或描述中是否包含分支相关的关键词
                         if (name.includes('branch') || name.includes('git') || 
                             description.includes('分支') || description.includes('branch')) {
                             branchParam = param;
                             hasBranchParam = true;
-                            console.log('找到分支参数:', name);
                             break;
                         }
                     }
 
                     if (branchParam) {
-                        console.log('开始处理分支选项');
                         let choices = [];
                         // 获取选项列表
                         const stringArray = branchParam.querySelector('choices > a.string-array');
                         if (stringArray) {
                             const strings = stringArray.querySelectorAll('string');
                             choices = Array.from(strings).map(choice => choice.textContent);
-                            console.log('获取到的分支选项:', choices);
                         }
 
                         if (choices.length > 0) {
                             const paramName = branchParam.querySelector('name').textContent;
-                            console.log('创建分支选择对话框:', { paramName, choicesCount: choices.length });
 
                             // 创建分支选择对话框
                             const dialog = document.createElement('div');
@@ -1482,19 +1471,16 @@ document.addEventListener('DOMContentLoaded', function() {
                             `;
 
                             document.body.appendChild(dialog);
-                            console.log('分支选择对话框已创建');
 
                             try {
                                 // 等待用户选择
                                 selectedBranch = await new Promise((resolve, reject) => {
-                                    console.log('等待用户选择分支');
                                     const confirmBtn = document.getElementById('confirmBranch');
                                     const cancelBtn = document.getElementById('cancelBranch');
                                     const select = document.getElementById('branchSelect');
 
                                     confirmBtn.onclick = () => {
                                         const branch = select.value;
-                                        console.log('用户确认选择分支:', branch);
                                         document.body.removeChild(dialog);
                                         resolve({
                                             name: paramName,
@@ -1503,7 +1489,6 @@ document.addEventListener('DOMContentLoaded', function() {
                                     };
 
                                     cancelBtn.onclick = () => {
-                                        console.log('用户取消选择分支');
                                         document.body.removeChild(dialog);
                                         resolve(null);
                                     };
@@ -1511,13 +1496,10 @@ document.addEventListener('DOMContentLoaded', function() {
                                 
                                 // 如果用户取消了选择，直接返回
                                 if (!selectedBranch && hasBranchParam) {
-                                    console.log('用户取消了构建过程');
                                     return;
                                 }
-                                
-                                console.log('分支选择完成:', selectedBranch);
                             } catch (error) {
-                                console.log('分支选择过程出错:', error);
+                                console.error('分支选择过程出错:', error);
                                 throw error;
                             }
                         }
@@ -1527,11 +1509,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // 获取crumb
             const crumbUrl = `${baseUrl}/crumbIssuer/api/json`;
-            console.log('获取crumb:', crumbUrl);
             
             // 只有在有分支参数且用户取消选择时才返回
             if (hasBranchParam && selectedBranch === null) {
-                console.log('用户取消了构建过程');
                 return;
             }
             
@@ -1563,8 +1543,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 ? `${baseUrl}${cleanJobPath}/buildWithParameters?${selectedBranch.name}=${encodeURIComponent(selectedBranch.value)}`
                 : `${baseUrl}${cleanJobPath}/build`;
             
-            console.log('触发构建:', buildUrl);
-            
             const buildResponse = await fetch(buildUrl, {
                 method: 'POST',
                 headers: headers
@@ -1581,7 +1559,6 @@ document.addEventListener('DOMContentLoaded', function() {
             const checkStatus = async () => {
                 try {
                     const statusUrl = `${baseUrl}${cleanJobPath}/lastBuild/api/json`;
-                    console.log('检查构建状态:', statusUrl);
 
                     const response = await fetch(statusUrl, {
                         headers: {
