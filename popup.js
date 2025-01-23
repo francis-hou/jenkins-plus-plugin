@@ -309,6 +309,155 @@ document.addEventListener('DOMContentLoaded', function() {
         searchInput.value = '';
         jobsContainer.innerHTML = '';
 
+        // 对任务按照上次成功构建时间降序排序
+        const sortedJobs = [...data.jobs].sort((a, b) => {
+            const timeA = a.lastSuccessfulBuild ? a.lastSuccessfulBuild.timestamp : 0;
+            const timeB = b.lastSuccessfulBuild ? b.lastSuccessfulBuild.timestamp : 0;
+            return timeB - timeA;  // 降序排序
+        });
+
+        // 创建并显示任务列表
+        sortedJobs.forEach(job => {
+            const jobElement = createJobElement(job);
+            jobsContainer.appendChild(jobElement);
+        });
+
+        // 设置自动刷新定时器
+        if (window.refreshTimer) {
+            clearInterval(window.refreshTimer);
+        }
+        window.refreshTimer = setInterval(async () => {
+            if (currentServer) {
+                try {
+                    const jobs = await fetchJenkinsJobs(currentServer);
+                    // 只更新任务状态，不重新创建整个列表
+                    if (jobs && jobs.jobs) {
+                        jobs.jobs.forEach(newJob => {
+                            const jobElement = jobsContainer.querySelector(`[data-job-name="${newJob.name}"]`);
+                            if (jobElement) {
+                                const isBuilding = newJob.color && newJob.color.endsWith('_anime');
+                                const buildButton = jobElement.querySelector('.build-button');
+                                if (buildButton) {
+                                    buildButton.textContent = isBuilding ? '构建中...' : '构建';
+                                    buildButton.title = isBuilding ? '点击取消构建' : '点击开始构建';
+                                    
+                                    // 移除旧的点击事件
+                                    const newButton = buildButton.cloneNode(true);
+                                    buildButton.parentNode.replaceChild(newButton, buildButton);
+                                    
+                                    // 添加新的点击事件
+                                    newButton.onclick = async (e) => {
+                                        e.stopPropagation();
+                                        const jobLink = jobElement.querySelector('.job-name a');
+                                        if (isBuilding) {
+                                            // 如果正在构建，则取消构建
+                                            try {
+                                                const jobUrlObj = new URL(jobLink.href);
+                                                const jobPathMatch = jobUrlObj.pathname.match(/\/job\/([^\/]+)/);
+                                                if (!jobPathMatch) {
+                                                    throw new Error('无法解析任务路径');
+                                                }
+                                                const jobName = jobPathMatch[1];
+                                                const cleanJobPath = `/job/${jobName}`;
+                                                
+                                                let baseUrl = currentServer.url.trim();
+                                                if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
+                                                    baseUrl = 'http://' + baseUrl;
+                                                }
+                                                baseUrl = baseUrl.replace(/\/+$/, '');
+                                                
+                                                // 获取最后一次构建编号
+                                                const lastBuildUrl = `${baseUrl}${cleanJobPath}/lastBuild/api/json`;
+                                                const response = await fetch(lastBuildUrl, {
+                                                    headers: {
+                                                        'Authorization': 'Basic ' + btoa(`${currentServer.username}:${currentServer.token}`),
+                                                        'Accept': 'application/json'
+                                                    }
+                                                });
+                                                
+                                                if (!response.ok) {
+                                                    throw new Error(`获取构建信息失败: ${response.status}`);
+                                                }
+                                                
+                                                const buildData = await response.json();
+                                                const buildNumber = buildData.number;
+                                                
+                                                // 获取crumb
+                                                const crumbUrl = `${baseUrl}${currentServer.apiPath.replace('/api/json', '')}/crumbIssuer/api/json`;
+                                                const crumbResponse = await fetch(crumbUrl, {
+                                                    headers: {
+                                                        'Authorization': 'Basic ' + btoa(`${currentServer.username}:${currentServer.token}`),
+                                                        'Accept': 'application/json'
+                                                    }
+                                                });
+                                                
+                                                let headers = {
+                                                    'Authorization': 'Basic ' + btoa(`${currentServer.username}:${currentServer.token}`),
+                                                    'Content-Type': 'application/x-www-form-urlencoded'
+                                                };
+
+                                                // 如果有crumb，添加到请求头
+                                                if (crumbResponse.ok) {
+                                                    const crumbData = await crumbResponse.json();
+                                                    headers[crumbData.crumbRequestField] = crumbData.crumb;
+                                                }
+                                                
+                                                // 停止构建
+                                                const stopUrl = `${baseUrl}${cleanJobPath}/${buildNumber}/stop`;
+                                                const stopResponse = await fetch(stopUrl, {
+                                                    method: 'POST',
+                                                    headers: headers,
+                                                    credentials: 'include'
+                                                });
+                                                
+                                                if (!stopResponse.ok) {
+                                                    throw new Error(`取消构建失败: ${stopResponse.status}`);
+                                                }
+                                                
+                                                showNotification('已取消构建', { type: 'success' });
+                                            } catch (error) {
+                                                console.error('取消构建失败:', error);
+                                                showNotification('取消构建失败: ' + error.message, { type: 'error' });
+                                            }
+                                        } else {
+                                            // 如果未在构建，则开始构建
+                                            try {
+                                                await triggerBuild(jobLink.href, currentServer);
+                                            } catch (error) {
+                                                console.error('触发构建失败:', error);
+                                                // 只有在不是取消构建的情况下才显示错误通知
+                                                if (error.message !== '已取消构建') {
+                                                    showNotification('触发构建失败: ' + error.message, { type: 'error' });
+                                                }
+                                            }
+                                        }
+                                    };
+                                }
+                                // 更新状态图标
+                                const statusIcon = jobElement.querySelector('.status-icon');
+                                if (statusIcon) {
+                                    const baseColor = isBuilding ? newJob.color.replace('_anime', '') : newJob.color;
+                                    statusIcon.className = `status-icon ${getStatusClass(baseColor)}${isBuilding ? ' building' : ''}`;
+                                }
+                                // 更新最后构建时间
+                                const lastSuccessTime = jobElement.querySelector('.last-success-time');
+                                if (lastSuccessTime) {
+                                    const timestamp = newJob.lastSuccessfulBuild ? newJob.lastSuccessfulBuild.timestamp : null;
+                                    lastSuccessTime.textContent = `上次成功: ${formatTimeDiff(timestamp)}`;
+                                }
+                            }
+                        });
+                    }
+                } catch (error) {
+                    console.error('自动刷新失败:', error);
+                    // 只在非网络错误时显示通知
+                    if (!(error instanceof TypeError && error.message.includes('Failed to fetch'))) {
+                        showNotification('自动刷新失败: ' + error.message, { type: 'error' });
+                    }
+                }
+            }
+        }, 1000); // 每1秒刷新一次
+
         // 更新视图筛选器
         const viewFilter = document.getElementById('viewFilter');
         // 移除旧的事件监听器
@@ -353,6 +502,9 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                     });
 
+                    // 保存当前状态
+                    saveFormState();
+
                     // 更新视图
                     showJobsList(newData);
                 } catch (error) {
@@ -376,6 +528,13 @@ document.addEventListener('DOMContentLoaded', function() {
             jobsContainer.innerHTML = '<div class="no-jobs">没有找到任何任务</div>';
             return;
         }
+
+        // 对任务按照上次成功构建时间降序排序
+        data.jobs.sort((a, b) => {
+            const timeA = a.lastSuccessfulBuild ? a.lastSuccessfulBuild.timestamp : 0;
+            const timeB = b.lastSuccessfulBuild ? b.lastSuccessfulBuild.timestamp : 0;
+            return timeB - timeA;  // 降序排序
+        });
 
         // 移除旧的搜索事件监听器
         if (searchInput._inputHandler) {
@@ -434,13 +593,15 @@ document.addEventListener('DOMContentLoaded', function() {
             clearInterval(window.refreshTimer);
         }
         
+        // 保存当前状态
+        saveFormState();
+        
         // 隐藏任务列表相关元素
         jobsList.style.display = 'none';
         jobsContainer.style.display = 'none';
         
         // 显示服务器列表
         savedServers.style.display = 'block';
-        saveFormState();
     });
 
     refreshJobs.addEventListener('click', async () => {
@@ -675,6 +836,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // 检查是否在构建中（job.color 包含 '_anime' 后缀）
         const isBuilding = job.color && job.color.endsWith('_anime');
         jobElement.className = `job-item${isBuilding ? ' building' : ''}`;
+        jobElement.setAttribute('data-job-name', job.name);
         
         const jobInfo = document.createElement('div');
         jobInfo.className = 'job-info';
@@ -692,7 +854,14 @@ document.addEventListener('DOMContentLoaded', function() {
         // 从job.url中提取相对路径
         try {
             const jobUrlObj = new URL(job.url);
-            const relativePath = jobUrlObj.pathname;
+            // 从URL路径中提取job名称
+            const jobPathMatch = jobUrlObj.pathname.match(/\/job\/([^\/]+)/);
+            if (!jobPathMatch) {
+                throw new Error('无法解析任务路径');
+            }
+            const jobName = jobPathMatch[1];
+            const cleanPath = `/job/${jobName}`;  // 使用简单的job路径
+            
             // 使用currentServer的URL构建完整链接
             let baseUrl = currentServer.url.trim();
             // 如果URL不是以http或https开头，添加http://
@@ -702,7 +871,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // 移除URL末尾的斜杠
             baseUrl = baseUrl.replace(/\/+$/, '');
             // 构建完整URL
-            jobLink.href = `${baseUrl}${relativePath}`;
+            jobLink.href = `${baseUrl}${cleanPath}`;
         } catch (error) {
             console.warn('解析任务URL失败，使用原始URL:', error);
             jobLink.href = job.url;
@@ -723,19 +892,92 @@ document.addEventListener('DOMContentLoaded', function() {
         const buildButton = document.createElement('button');
         buildButton.className = 'build-button small-button';
         buildButton.textContent = isBuilding ? '构建中...' : '构建';
-        buildButton.disabled = isBuilding;
+        buildButton.title = isBuilding ? '点击取消构建' : '点击开始构建';
+        buildButton.disabled = false;
         buildButton.onclick = async (e) => {
             e.stopPropagation(); // 防止事件冒泡
-            if (!isBuilding) {
+            if (isBuilding) {
+                // 如果正在构建，则取消构建
                 try {
-                    buildButton.disabled = true;
-                    buildButton.textContent = '构建中...';
+                    const jobUrlObj = new URL(jobLink.href);
+                    const jobPathMatch = jobUrlObj.pathname.match(/\/job\/([^\/]+)/);
+                    if (!jobPathMatch) {
+                        throw new Error('无法解析任务路径');
+                    }
+                    const jobName = jobPathMatch[1];
+                    const cleanJobPath = `/job/${jobName}`;
+                    
+                    let baseUrl = currentServer.url.trim();
+                    if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
+                        baseUrl = 'http://' + baseUrl;
+                    }
+                    baseUrl = baseUrl.replace(/\/+$/, '');
+                    
+                    // 获取最后一次构建编号
+                    const lastBuildUrl = `${baseUrl}${cleanJobPath}/lastBuild/api/json`;
+                    const response = await fetch(lastBuildUrl, {
+                        headers: {
+                            'Authorization': 'Basic ' + btoa(`${currentServer.username}:${currentServer.token}`),
+                            'Accept': 'application/json'
+                        }
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`获取构建信息失败: ${response.status}`);
+                    }
+                    
+                    const buildData = await response.json();
+                    const buildNumber = buildData.number;
+                    
+                    // 获取crumb
+                    const crumbUrl = `${baseUrl}${currentServer.apiPath.replace('/api/json', '')}/crumbIssuer/api/json`;
+                    const crumbResponse = await fetch(crumbUrl, {
+                        headers: {
+                            'Authorization': 'Basic ' + btoa(`${currentServer.username}:${currentServer.token}`),
+                            'Accept': 'application/json'
+                        }
+                    });
+                    
+                    let headers = {
+                        'Authorization': 'Basic ' + btoa(`${currentServer.username}:${currentServer.token}`),
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    };
+
+                    // 如果有crumb，添加到请求头
+                    if (crumbResponse.ok) {
+                        const crumbData = await crumbResponse.json();
+                        headers[crumbData.crumbRequestField] = crumbData.crumb;
+                    }
+                    
+                    // 停止构建
+                    const stopUrl = `${baseUrl}${cleanJobPath}/${buildNumber}/stop`;
+                    const stopResponse = await fetch(stopUrl, {
+                        method: 'POST',
+                        headers: headers,
+                        credentials: 'include'
+                    });
+                    
+                    if (!stopResponse.ok) {
+                        throw new Error(`取消构建失败: ${stopResponse.status}`);
+                    }
+                    
+                    showNotification('已取消构建', { type: 'success' });
+                    buildButton.textContent = '构建';
+                    buildButton.title = '点击开始构建';
+                } catch (error) {
+                    console.error('取消构建失败:', error);
+                    showNotification('取消构建失败: ' + error.message, { type: 'error' });
+                }
+            } else {
+                // 如果未在构建，则开始构建
+                try {
                     await triggerBuild(jobLink.href, currentServer);
                 } catch (error) {
                     console.error('触发构建失败:', error);
-                    showNotification('触发构建失败: ' + error.message, { type: 'error' });
-                    buildButton.disabled = false;
-                    buildButton.textContent = '构建';
+                    // 只有在不是取消构建的情况下才显示错误通知
+                    if (error.message !== '已取消构建') {
+                        showNotification('触发构建失败: ' + error.message, { type: 'error' });
+                    }
                 }
             }
         };
@@ -796,13 +1038,32 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 显示通知
     function showNotification(message, options = {}) {
+        if (!message) {
+            console.warn('通知消息为空');
+            return;
+        }
+
+        // 如果是Error对象，获取错误信息
+        if (message instanceof Error) {
+            message = message.message || '未知错误';
+        }
+
+        // 如果message是对象，尝试转换为字符串
+        if (typeof message === 'object') {
+            try {
+                message = JSON.stringify(message);
+            } catch (e) {
+                message = '未知错误';
+            }
+        }
+
         // 创建提示框元素
         const toast = document.createElement('div');
         toast.className = `toast ${options.type || 'info'}`;
         
         // 创建消息文本元素
         const messageText = document.createElement('span');
-        messageText.textContent = message;
+        messageText.textContent = message || '操作完成';
         toast.appendChild(messageText);
         
         // 创建关闭按钮
@@ -812,7 +1073,9 @@ document.addEventListener('DOMContentLoaded', function() {
         closeButton.onclick = () => {
             toast.classList.remove('show');
             setTimeout(() => {
+                if (document.body.contains(toast)) {
                 document.body.removeChild(toast);
+                }
             }, 300);
         };
         toast.appendChild(closeButton);
@@ -838,6 +1101,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 3000);
 
         // 同时也发送系统通知
+        if (message) {  // 只在有消息时发送系统通知
         const notificationOptions = {
             type: 'basic',
             iconUrl: 'images/icon128.png',
@@ -846,6 +1110,7 @@ document.addEventListener('DOMContentLoaded', function() {
         };
 
         chrome.notifications.create(notificationOptions);
+        }
     }
 
     // 清空表单
@@ -882,7 +1147,11 @@ document.addEventListener('DOMContentLoaded', function() {
             searchInput: document.getElementById('searchJobs').value,
             viewFilter: document.getElementById('viewFilter').value,
             projectFilter: document.getElementById('projectFilter').value,
-            envFilter: document.getElementById('envFilter').value
+            envFilter: document.getElementById('envFilter').value,
+            // 保存当前服务器状态
+            currentServer: currentServer,
+            // 保存Jenkins视图状态
+            jenkinsView: currentServer?.currentView || null
         };
         chrome.storage.local.set({ formState });
     }
@@ -913,9 +1182,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // 恢复搜索和筛选器状态
         document.getElementById('searchJobs').value = formState.searchInput || '';
-        if (formState.viewFilter) document.getElementById('viewFilter').value = formState.viewFilter;
-        if (formState.projectFilter) document.getElementById('projectFilter').value = formState.projectFilter;
-        if (formState.envFilter) document.getElementById('envFilter').value = formState.envFilter;
 
         // 恢复当前视图
         switch (formState.currentView) {
@@ -942,7 +1208,50 @@ document.addEventListener('DOMContentLoaded', function() {
                 addServerForm.style.display = 'none';
                 editServerForm.style.display = 'none';
                 jobsList.style.display = 'block';
+                
+                // 如果有保存的服务器状态，恢复它
+                if (formState.currentServer) {
+                    currentServer = formState.currentServer;
+                    // 恢复Jenkins视图状态
+                    if (formState.jenkinsView) {
+                        currentServer.currentView = formState.jenkinsView;
+                    }
+                    // 获取并显示任务列表
+                    fetchJenkinsJobs(currentServer).then(jobs => {
+                        showJobsList(jobs);
+                        // 在任务列表显示后恢复筛选器状态
+                        if (formState.viewFilter) {
+                            const viewFilter = document.getElementById('viewFilter');
+                            if (viewFilter) {
+                                viewFilter.value = formState.viewFilter;
+                            }
+                        }
+                        if (formState.searchInput) {
+                            const searchInput = document.getElementById('searchJobs');
+                            if (searchInput && searchInput._inputHandler) {
+                                searchInput.dispatchEvent(new Event('input'));
+                            }
+                        }
+                    }).catch(error => {
+                        console.error('恢复任务列表失败:', error);
+                        showNotification('恢复任务列表失败: ' + error.message, { type: 'error' });
+                    });
+                }
                 break;
+        }
+
+        // 恢复项目和环境筛选器状态
+        if (formState.projectFilter) {
+            const projectFilter = document.getElementById('projectFilter');
+            if (projectFilter) {
+                projectFilter.value = formState.projectFilter;
+            }
+        }
+        if (formState.envFilter) {
+            const envFilter = document.getElementById('envFilter');
+            if (envFilter) {
+                envFilter.value = formState.envFilter;
+            }
         }
     }
 
@@ -1060,6 +1369,8 @@ document.addEventListener('DOMContentLoaded', function() {
     // 触发构建
     async function triggerBuild(jobUrl, server) {
         try {
+            console.log('开始触发构建流程:', { jobUrl, server: server.url });
+            
             // 处理URL，确保格式正确
             let baseUrl = server.url.trim();
             
@@ -1073,12 +1384,156 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // 获取job路径
             const jobUrlObj = new URL(jobUrl);
-            const jobPath = jobUrlObj.pathname;
+            console.log('解析任务URL:', jobUrlObj);
             
-            // 获取crumb，使用已知的API路径
-            const apiPath = server.apiPath || '';
-            const crumbUrl = `${baseUrl}${apiPath.replace('/api/json', '')}/crumbIssuer/api/json`;
+            // 从URL路径中提取job名称
+            const jobPathMatch = jobUrlObj.pathname.match(/\/job\/([^\/]+)/);
+            if (!jobPathMatch) {
+                console.error('无法解析任务路径:', jobUrlObj.pathname);
+                throw new Error('无法解析任务路径');
+            }
+            const jobName = jobPathMatch[1];
+            const cleanJobPath = `/job/${jobName}`;
+            console.log('提取的任务路径:', { jobName, cleanJobPath });
+
+            // 先获取任务配置，检查是否有分支参数
+            const configUrl = `${baseUrl}${cleanJobPath}/config.xml`;
+            console.log('获取任务配置URL:', configUrl);
+            
+            const configResponse = await fetch(configUrl, {
+                headers: {
+                    'Authorization': 'Basic ' + btoa(`${server.username}:${server.token}`),
+                    'Accept': 'application/xml'
+                }
+            });
+
+            let selectedBranch = null;
+            let hasBranchParam = false;
+
+            // 只有在配置获取成功时才检查分支参数
+            if (configResponse.ok) {
+                console.log('成功获取配置文件');
+                const configText = await configResponse.text();
+                
+                const parser = new DOMParser();
+                const xmlDoc = parser.parseFromString(configText, 'text/xml');
+                console.log('解析XML文档完成');
+                
+                // 查找参数定义属性
+                const paramDefProperty = xmlDoc.querySelector('hudson\\.model\\.ParametersDefinitionProperty');
+                console.log('参数定义属性:', paramDefProperty);
+                
+                if (paramDefProperty) {
+                    console.log('找到参数定义属性，开始处理分支参数');
+                    // 查找所有参数定义
+                    const paramDefs = paramDefProperty.querySelectorAll('parameterDefinitions > hudson\\.model\\.ChoiceParameterDefinition');
+                    console.log('找到的参数定义数量:', paramDefs.length);
+                    
+                    let branchParam = null;
+                    
+                    // 查找分支相关的参数
+                    for (const param of paramDefs) {
+                        const nameElem = param.querySelector('name');
+                        const name = nameElem?.textContent?.toLowerCase() || '';
+                        const description = param.querySelector('description')?.textContent?.toLowerCase() || '';
+                        console.log('检查参数:', { name, description });
+                        
+                        // 检查名称或描述中是否包含分支相关的关键词
+                        if (name.includes('branch') || name.includes('git') || 
+                            description.includes('分支') || description.includes('branch')) {
+                            branchParam = param;
+                            hasBranchParam = true;
+                            console.log('找到分支参数:', name);
+                            break;
+                        }
+                    }
+
+                    if (branchParam) {
+                        console.log('开始处理分支选项');
+                        let choices = [];
+                        // 获取选项列表
+                        const stringArray = branchParam.querySelector('choices > a.string-array');
+                        if (stringArray) {
+                            const strings = stringArray.querySelectorAll('string');
+                            choices = Array.from(strings).map(choice => choice.textContent);
+                            console.log('获取到的分支选项:', choices);
+                        }
+
+                        if (choices.length > 0) {
+                            const paramName = branchParam.querySelector('name').textContent;
+                            console.log('创建分支选择对话框:', { paramName, choicesCount: choices.length });
+
+                            // 创建分支选择对话框
+                            const dialog = document.createElement('div');
+                            dialog.className = 'branch-dialog';
+                            dialog.innerHTML = `
+                                <div class="branch-dialog-content">
+                                    <h3>请选择构建分支</h3>
+                                    <select id="branchSelect" class="branch-select">
+                                        ${choices.map(choice => 
+                                            `<option value="${choice}">${choice}</option>`
+                                        ).join('')}
+                                    </select>
+                                    <div class="branch-dialog-buttons">
+                                        <button id="confirmBranch" class="small-button">确定</button>
+                                        <button id="cancelBranch" class="small-button">取消</button>
+                                    </div>
+                                </div>
+                            `;
+
+                            document.body.appendChild(dialog);
+                            console.log('分支选择对话框已创建');
+
+                            try {
+                                // 等待用户选择
+                                selectedBranch = await new Promise((resolve, reject) => {
+                                    console.log('等待用户选择分支');
+                                    const confirmBtn = document.getElementById('confirmBranch');
+                                    const cancelBtn = document.getElementById('cancelBranch');
+                                    const select = document.getElementById('branchSelect');
+
+                                    confirmBtn.onclick = () => {
+                                        const branch = select.value;
+                                        console.log('用户确认选择分支:', branch);
+                                        document.body.removeChild(dialog);
+                                        resolve({
+                                            name: paramName,
+                                            value: branch
+                                        });
+                                    };
+
+                                    cancelBtn.onclick = () => {
+                                        console.log('用户取消选择分支');
+                                        document.body.removeChild(dialog);
+                                        resolve(null);
+                                    };
+                                });
+                                
+                                // 如果用户取消了选择，直接返回
+                                if (!selectedBranch && hasBranchParam) {
+                                    console.log('用户取消了构建过程');
+                                    return;
+                                }
+                                
+                                console.log('分支选择完成:', selectedBranch);
+                            } catch (error) {
+                                console.log('分支选择过程出错:', error);
+                                throw error;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 获取crumb
+            const crumbUrl = `${baseUrl}/crumbIssuer/api/json`;
             console.log('获取crumb:', crumbUrl);
+            
+            // 只有在有分支参数且用户取消选择时才返回
+            if (hasBranchParam && selectedBranch === null) {
+                console.log('用户取消了构建过程');
+                return;
+            }
             
             const crumbResponse = await fetch(crumbUrl, {
                 headers: {
@@ -1087,23 +1542,32 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             });
             
-            if (!crumbResponse.ok) {
-                throw new Error(`获取crumb失败: ${crumbResponse.status}`);
+            let crumbData = null;
+            if (crumbResponse.ok) {
+                crumbData = await crumbResponse.json();
             }
+
+            // 构建请求头
+            const headers = {
+                'Authorization': 'Basic ' + btoa(`${server.username}:${server.token}`),
+                'Accept': 'application/json'
+            };
+
+            // 如果有crumb，添加到请求头
+            if (crumbData) {
+                headers[crumbData.crumbRequestField] = crumbData.crumb;
+            }
+
+            // 根据是否有选择分支构建不同的URL
+            const buildUrl = selectedBranch 
+                ? `${baseUrl}${cleanJobPath}/buildWithParameters?${selectedBranch.name}=${encodeURIComponent(selectedBranch.value)}`
+                : `${baseUrl}${cleanJobPath}/build`;
             
-            const crumbData = await crumbResponse.json();
-            
-            // 触发构建
-            const buildUrl = `${baseUrl}${jobPath}/build`;
             console.log('触发构建:', buildUrl);
             
             const buildResponse = await fetch(buildUrl, {
                 method: 'POST',
-                headers: {
-                    'Authorization': 'Basic ' + btoa(`${server.username}:${server.token}`),
-                    'Accept': 'application/json',
-                    [crumbData.crumbRequestField]: crumbData.crumb
-                }
+                headers: headers
             });
             
             if (!buildResponse.ok) {
@@ -1114,35 +1578,12 @@ document.addEventListener('DOMContentLoaded', function() {
             showNotification('构建已触发', { type: 'success' });
             
             // 开始监控构建状态
-            pollBuildStatus(jobUrl, server);
-        } catch (error) {
-            console.error('触发构建失败:', error);
-            showNotification('触发构建失败: ' + error.message, { type: 'error' });
-        }
-    }
-
-    // 监控构建状态
-    async function pollBuildStatus(jobUrl, server) {
-        try {
-            // 处理URL，确保格式正确
-            let baseUrl = server.url.trim();
-            if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
-                baseUrl = 'http://' + baseUrl;
-            }
-            baseUrl = baseUrl.replace(/\/+$/, '');
-
-            // 获取job路径
-            const jobUrlObj = new URL(jobUrl);
-            const jobPath = jobUrlObj.pathname;
-
-            // 构建lastBuild API URL
-            const apiPath = server.apiPath || '';
-            const buildStatusUrl = `${baseUrl}${jobPath}/lastBuild/api/json`;
-            console.log('检查构建状态:', buildStatusUrl);
-
             const checkStatus = async () => {
                 try {
-                    const response = await fetch(buildStatusUrl, {
+                    const statusUrl = `${baseUrl}${cleanJobPath}/lastBuild/api/json`;
+                    console.log('检查构建状态:', statusUrl);
+
+                    const response = await fetch(statusUrl, {
                         headers: {
                             'Authorization': 'Basic ' + btoa(`${server.username}:${server.token}`),
                             'Accept': 'application/json'
@@ -1157,7 +1598,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     
                     if (data.building) {
                         // 如果还在构建中，继续轮询
-                        showNotification('构建进行中...', { type: 'info' });
                         setTimeout(checkStatus, 2000); // 2秒后再次检查
                     } else {
                         // 构建完成
@@ -1169,15 +1609,21 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 } catch (error) {
                     console.error('检查构建状态失败:', error);
-                    showNotification('检查构建状态失败: ' + error.message, { type: 'error' });
+                    // 只在非网络错误时显示通知
+                    if (!(error instanceof TypeError && error.message.includes('Failed to fetch'))) {
+                        showNotification('检查构建状态失败: ' + error.message, { type: 'error' });
+                    }
                 }
             };
 
             // 延迟2秒后开始第一次检查
             setTimeout(checkStatus, 2000);
         } catch (error) {
-            console.error('监控构建状态失败:', error);
-            showNotification('监控构建状态失败: ' + error.message, { type: 'error' });
+            console.error('触发构建失败:', error);
+            // 只有在不是取消构建的情况下才显示错误通知
+            if (error.message !== '已取消构建') {
+                showNotification('触发构建失败: ' + error.message, { type: 'error' });
+            }
         }
     }
 
